@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>와이어프레임 — 녹음 → 요약 플로우</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Courier New', monospace;
+    background: #f5f5f0;
+    color: #1a1a1a;
+    padding: 40px 20px 80px;
+  }
+
+  h1 {
+    text-align: center;
+    font-size: 13px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: #888;
+    margin-bottom: 48px;
+    font-weight: 400;
+  }
+
+  /* ── Flow wrapper ── */
+  .flow {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: 520px;
+    margin: 0 auto;
+  }
+
+  /* ── Step block ── */
+  .step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .step-label {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #aaa;
+    margin-bottom: 8px;
+    align-self: flex-start;
+    padding-left: 2px;
+  }
+
+  /* ── Phone frame ── */
+  .phone {
+    width: 100%;
+    border: 2px solid #1a1a1a;
+    border-radius: 24px;
+    background: #fff;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* status bar */
+  .phone::before {
+    content: '';
+    display: block;
+    height: 28px;
+    background: #f0f0f0;
+    border-bottom: 1.5px solid #e0e0e0;
+  }
+
+  .screen {
+    padding: 20px 20px 24px;
+    min-height: 220px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Arrow connector ── */
+  .arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 8px 0;
+    color: #999;
+  }
+
+  .arrow-line {
+    width: 1.5px;
+    height: 20px;
+    background: #bbb;
+  }
+
+  .arrow-label {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: #bbb;
+  }
+
+  .arrow-tip {
+    font-size: 14px;
+    color: #bbb;
+    margin-top: -4px;
+  }
+
+  /* ── Wireframe components ── */
+  .wf-block {
+    background: #f0f0ec;
+    border: 1.5px solid #ccc;
+    border-radius: 6px;
+  }
+
+  .wf-box {
+    background: #e8e8e4;
+    border: 1.5px solid #bbb;
+    border-radius: 4px;
+  }
+
+  .wf-line {
+    height: 10px;
+    background: #e0e0dc;
+    border-radius: 2px;
+    margin-bottom: 7px;
+  }
+
+  .wf-line.short { width: 60%; }
+  .wf-line.med   { width: 80%; }
+  .wf-line.full  { width: 100%; }
+
+  .label-tag {
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #999;
+    margin-bottom: 6px;
+  }
+
+  /* ── Step 1: 문서 입력 ── */
+  .doc-drop {
+    border: 1.5px dashed #bbb;
+    border-radius: 8px;
+    height: 90px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    color: #bbb;
+    margin-bottom: 12px;
+  }
+
+  .doc-drop-icon {
+    font-size: 22px;
+  }
+
+  .doc-drop-text {
+    font-size: 10px;
+    letter-spacing: 0.06em;
+  }
+
+  /* camera/direct toggle */
+  .toggle-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .toggle-btn {
+    flex: 1;
+    border: 1.5px solid #bbb;
+    border-radius: 6px;
+    padding: 8px 0;
+    text-align: center;
+    font-size: 10px;
+    color: #999;
+    letter-spacing: 0.05em;
+  }
+
+  .toggle-btn.active {
+    border-color: #1a1a1a;
+    color: #1a1a1a;
+    background: #f0f0ec;
+  }
+
+  /* ── Step 2: 녹음 대기 ── */
+  .rec-controls {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    margin-top: 8px;
+  }
+
+  .rec-circle {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    border: 2px solid #1a1a1a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .rec-dot {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: #e0e0dc;
+    border: 1.5px solid #bbb;
+  }
+
+  .mini-btn-row {
+    display: flex;
+    gap: 10px;
+  }
+
+  .mini-btn {
+    width: 30px;
+    height: 30px;
+    border: 1.5px solid #ccc;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    color: #bbb;
+  }
+
+  /* ── Step 3: 녹음 중 ── */
+  .rec-dot.active {
+    background: #888;
+    border-color: #666;
+  }
+
+  .waveform {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    height: 32px;
+  }
+
+  .wave-bar {
+    width: 4px;
+    border-radius: 2px;
+    background: #bbb;
+  }
+
+  .timer-text {
+    font-size: 11px;
+    color: #aaa;
+    letter-spacing: 0.1em;
+    text-align: center;
+  }
+
+  /* ── Step 4 & 6: 변환 중 / 요약 중 ── */
+  .loading-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    min-height: 160px;
+  }
+
+  .spinner {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 2px solid #e0e0dc;
+    border-top-color: #888;
+  }
+
+  .loading-dots {
+    display: flex;
+    gap: 5px;
+  }
+
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #ccc;
+  }
+
+  /* ── Step 5: 텍스트 결과 ── */
+  .text-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-right: 8px;
+  }
+
+  /* ── Step 7: 요약 결과 ── */
+  .summary-card {
+    border: 1.5px solid #ccc;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .summary-header {
+    background: #f0f0ec;
+    border-bottom: 1.5px solid #ccc;
+    padding: 8px 12px;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    color: #888;
+    text-transform: uppercase;
+  }
+
+  .summary-body {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .cta-btn {
+    margin-top: 10px;
+    border: 1.5px solid #1a1a1a;
+    border-radius: 8px;
+    padding: 10px;
+    text-align: center;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: #1a1a1a;
+  }
+
+  /* scrollbar hint */
+  .scroll-hint {
+    width: 3px;
+    background: #ddd;
+    border-radius: 2px;
+    position: absolute;
+    right: 6px;
+    top: 40px;
+    height: 40px;
+  }
+</style>
+</head>
+<body>
+
+<h1>녹음 → 전사 → 요약 — 플로우 와이어프레임</h1>
+
+<div class="flow">
+
+  <!-- ─── STEP 1: 문서 입력 ─── -->
+  <div class="step">
+    <div class="step-label">1 — 문서 입력</div>
+    <div class="phone">
+      <div class="screen">
+        <div class="label-tag">문서를 불러오세요</div>
+        <div class="doc-drop">
+          <div class="doc-drop-icon">⬆</div>
+          <div class="doc-drop-text">파일 업로드 / 카메라 촬영</div>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-btn active">카메라</div>
+          <div class="toggle-btn">직접 입력</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">
+    <div class="arrow-line"></div>
+    <div class="arrow-label">끝 →</div>
+    <div class="arrow-tip">▼</div>
+  </div>
+
+  <!-- ─── STEP 2: 녹음 대기 ─── -->
+  <div class="step">
+    <div class="step-label">2 — 녹음 대기</div>
+    <div class="phone">
+      <div class="screen">
+        <div class="label-tag">녹음 준비</div>
+        <div class="rec-controls">
+          <div class="rec-circle">
+            <div class="rec-dot"></div>
+          </div>
+          <div class="timer-text">00:00</div>
+          <div class="mini-btn-row">
+            <div class="mini-btn">▷</div>
+            <div class="mini-btn">⊘</div>
+            <div class="mini-btn">□</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">
+    <div class="arrow-line"></div>
+    <div class="arrow-tip">▼</div>
+  </div>
+
+  <!-- ─── STEP 3: 녹음 중 ─── -->
+  <div class="step">
+    <div class="step-label">3 — 녹음 중</div>
+    <div class="phone">
+      <div class="screen">
+        <div class="label-tag">녹음 중...</div>
+        <div class="rec-controls">
+          <div class="rec-circle">
+            <div class="rec-dot active"></div>
+          </div>
+          <div class="waveform">
+            <div class="wave-bar" style="height:10px"></div>
+            <div class="wave-bar" style="height:22px"></div>
+            <div class="wave-bar" style="height:16px"></div>
+            <div class="wave-bar" style="height:28px"></div>
+            <div class="wave-bar" style="height:12px"></div>
+            <div class="wave-bar" style="height:24px"></div>
+            <div class="wave-bar" style="height:8px"></div>
+            <div class="wave-bar" style="height:18px"></div>
+            <div class="wave-bar" style="height:26px"></div>
+            <div class="wave-bar" style="height:14px"></div>
+          </div>
+          <div class="timer-text">01:23</div>
+          <div class="mini-btn-row">
+            <div class="mini-btn">⏸</div>
+            <div class="mini-btn">⊘</div>
+            <div class="mini-btn">□</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">
+    <div class="arrow-line"></div>
+    <div class="arrow-label">끝 →</div>
+    <div class="arrow-tip">▼</div>
+  </div>
+
+  <!-- ─── STEP 4: 변환 중 ─── -->
+  <div class="step">
+    <div class="step-label">4 — 변환 중</div>
+    <div class="phone">
+      <div class="screen">
+        <div class="label-tag">텍스트로 변환 중</div>
+        <div class="loading-state">
+          <div class="spinner"></div>
+          <div class="loading-dots">
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">
+    <div class="arrow-line"></div>
+    <div class="arrow-tip">▼</div>
+  </div>
+
+  <!-- ─── STEP 5: 텍스트 결과 ─── -->
+  <div class="step">
+    <div class="step-label">5 — 전사 텍스트</div>
+    <div class="phone" style="position:relative">
+      <div class="scroll-hint"></div>
+      <div class="screen">
+        <div class="label-tag">도막 — 전사 결과</div>
+        <div class="text-scroll">
+          <div class="wf-line full"></div>
+          <div class="wf-line med"></div>
+          <div class="wf-line full"></div>
+          <div class="wf-line short"></div>
+          <div class="wf-line full"></div>
+          <div class="wf-line med"></div>
+          <div class="wf-line full"></div>
+          <div class="wf-line short"></div>
+        </div>
+        <div class="cta-btn">요약하기</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">
+    <div class="arrow-line"></div>
+    <div class="arrow-label">또는</div>
+    <div class="arrow-tip">▼</div>
+  </div>
+
+  <!-- ─── STEP 6: 요약 중 ─── -->
+  <div class="step">
+    <div class="step-label">6 — 요약 중</div>
+    <div class="phone">
+      <div class="screen">
+        <div class="label-tag">요약 생성 중</div>
+        <div class="loading-state">
+          <div class="spinner"></div>
+          <div class="loading-dots">
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">
+    <div class="arrow-line"></div>
+    <div class="arrow-tip">▼</div>
+  </div>
+
+  <!-- ─── STEP 7: 요약 결과 ─── -->
+  <div class="step">
+    <div class="step-label">7 — 요약 완료</div>
+    <div class="phone">
+      <div class="screen">
+        <div class="label-tag">지하도약 — 요약 내용</div>
+        <div class="summary-card">
+          <div class="summary-header">요약</div>
+          <div class="summary-body">
+            <div class="wf-line full"></div>
+            <div class="wf-line med"></div>
+            <div class="wf-line full"></div>
+            <div class="wf-line short"></div>
+            <div class="wf-line full"></div>
+          </div>
+        </div>
+        <div class="cta-btn" style="margin-top:14px">저장 / 공유</div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- .flow -->
+
+</body>
+</html>
