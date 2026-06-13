@@ -3,12 +3,15 @@
 ## github 사용 규칙
 
 ### 1. main에 절대 push하지 않는다.
-### 2. 다른 팀원 branch를 사용 시 자신의 새 branch를 만들어서 사용한다. 
-### 3. full request할 때 과반수 동의하에 진행한다.
+### 2. develop branch는 절대 삭제하지 않는다.
+### 3. 모든 파생 branch는 develop으로부터 파생된다.
+### 4. 다른 팀원 branch를 사용 시 자신의 새 branch를 만들어서 사용한다. 
+### 5. develop에 merge할 때 과반수 동의하에 진행한다.
 - 코드 오류 발견하기 위해
-### 4. 버전이 한 개 완성될 때마다 main에 full request한다.
+### 6. develop에 merge한 이후 해당 파생 branch는 삭제한다.
+### 7. 버전이 한 개 완성될 때마다 main에 full request한다.
 - ver. 1.0.0이 ver. 1.0.1처럼 숫자가 변경되는 것
-### 5. 버전 업데이트 시 README.md에 버전과 무엇이 업데이트 되었는지 요약하여 적는다.
+### 8. 버전 업데이트 시 README.md에 버전과 무엇이 업데이트 되었는지 요약하여 적는다.
 - ver. 1.2.3 : 녹음이 텍스트로 변환되지 않는 오류 수정
 
 ## 버전 관리
