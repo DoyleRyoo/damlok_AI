@@ -74,6 +74,7 @@ nvidia-nccl-cu13==2.29.7
 nvidia-nvjitlink==13.0.88
 nvidia-nvshmem-cu13==3.4.5
 nvidia-nvtx==13.0.85
+openai==2.43.0
 openai-whisper==20250625
 orjson==3.11.9
 ormsgpack==1.12.2
