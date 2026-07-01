@@ -19,6 +19,7 @@ from app.schemas import (
     PreprocessDebugResponse,
     PreprocessResponse,
     ShortSummaryResponse,
+    SttDebugResponse,
     SttJobCreateResponse,
     SttJobRequest,
     SttJobStatusResponse,
@@ -36,7 +37,7 @@ from app.services.preprocess_service import (
 )
 from app.services.storage_service import default_audio_bucket
 from app.services.stt_job_service import create_stt_job, get_stt_job, process_stt_job
-from app.services.stt_service import transcribe_audio
+from app.services.stt_service import debug_transcribe_audio, transcribe_audio
 from app.services.summary_service import (
     SummaryServiceError,
     analyze_meeting,
@@ -209,6 +210,22 @@ async def aiactions_stt(file: UploadFile = File(...)) -> TextResponse:
         raise HTTPException(
             status_code=502,
             detail="회의 음성을 텍스트로 변환하지 못했습니다.",
+        ) from exc
+
+
+@app.post(
+    "/aiactions/stt/debug",
+    response_model=SttDebugResponse,
+    summary="프로젝트 회의록 STT provider 속도 비교",
+    openapi_extra=STT_FILE_REQUEST_BODY_DOC,
+)
+async def aiactions_stt_debug(file: UploadFile = File(...)) -> SttDebugResponse:
+    try:
+        return await debug_transcribe_audio(file)
+    except SummaryServiceError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="회의 음성 STT provider 비교를 수행하지 못했습니다.",
         ) from exc
 
 

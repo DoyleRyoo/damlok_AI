@@ -16,6 +16,22 @@ class TextResponse(BaseModel):
     text: str = Field(description="처리된 텍스트")
 
 
+class SttProviderDebugResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    available: bool = Field(description="해당 provider 실행 성공 여부")
+    elapsed_ms: int | None = Field(default=None, description="처리 시간(ms)")
+    text: str | None = Field(default=None, description="STT 결과 텍스트")
+    error: str | None = Field(default=None, description="실패 사유")
+
+
+class SttDebugResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    local: SttProviderDebugResult
+    openai: SttProviderDebugResult
+
+
 class PreprocessResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

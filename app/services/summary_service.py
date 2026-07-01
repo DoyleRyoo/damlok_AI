@@ -3,7 +3,7 @@ import json
 import os
 import re
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, timedelta
 from typing import TypeVar
 
 from openai import AsyncOpenAI, OpenAIError
@@ -67,11 +67,14 @@ JSON null이 필요한 필드에는 문자열 "null"을 절대 쓰지 마세요.
 - objective에는 회의의 배경과 목적을, discussion에는 주요 쟁점과 의견을,
   decision에는 확정된 결정과 미결 사항을 구분해 작성하세요.
 - tagged_transcript 입력에서는 DISCUSSION, INFO, QUESTION, ANSWER를 discussion에 참고하세요.
-- tagged_transcript 입력에서는 DECISION 태그를 decision에 우선 참고하세요.
+- tagged_transcript 입력에서는 DECISION 태그를 decision에 우선 참고하되, 명확한 결정/확정/합의/보류가 없는 내용을 결정으로 만들지 마세요.
+- 회의 진행, 발표 순서, 시간 관계상 발표 생략, 다음 순서 안내 같은 운영성 결정은 summary.decision에 넣지 마세요.
 - action_items가 없으면 빈 배열 [] 로 작성하세요.
 - action_candidates가 없으면 빈 배열 [] 로 작성하세요.
 - action_items에는 ACTION 태그 중 실제 실행 지시성이 높은 항목을 넣으세요. 담당자가 없어도 명확한 지시나 계획이면 assignee_name을 null로 두고 포함할 수 있습니다.
+- ACTION 태그라도 검토, 제안, 정책 방향, 개선 필요성에 가까우면 action_items가 아니라 action_candidates에 넣으세요.
 - action_candidates에는 정책 방향, 검토 주제, 개선 필요성, 담당자가 불분명하지만 실행 가능성이 있는 항목을 넣으세요.
+- QUESTION/ANSWER 태그 안에도 실행 가능한 제안, 검토 답변, 추진 의사가 있으면 action_candidates 근거로 참고하세요.
 - action_items와 action_candidates는 관리자/프론트 검토용 AI 응답입니다. source_type, confidence, evidence, duplicate_group_id는 DB 저장용이 아닙니다.
 - source_type은 DIRECTIVE, PLAN, SUGGESTION, DISCUSSION 중 하나만 사용하세요.
 - confidence는 HIGH, MEDIUM, LOW 중 하나만 사용하세요. HIGH는 실제 Task 저장 가능, MEDIUM은 후보 검토 필요, LOW는 단순 논의에 가깝다는 뜻입니다.
@@ -100,10 +103,12 @@ MERGE_SYSTEM_PROMPT = """
 - summary는 회의 내용을 다시 확인하지 않아도 될 만큼 구체적으로 작성하세요.
 - objective에는 전체 회의의 배경과 목적을 작성하세요.
 - discussion에는 주요 쟁점, 의견, 근거와 미결 사항을 종합하세요.
-- decision에는 실제로 확정된 결정 사항만 작성하세요.
+- decision에는 실제로 확정된 결정 사항만 작성하세요. 명확한 결정/확정/합의/보류가 없으면 논의나 후보를 결정으로 만들지 마세요.
+- 회의 진행, 발표 순서, 시간 관계상 발표 생략, 다음 순서 안내 같은 운영성 결정은 decision에 넣지 마세요.
 - DISCUSSION, INFO, QUESTION, ANSWER는 discussion에 참고하고, DECISION은 decision에 우선 반영하세요.
 - action_items에는 실제 실행 지시성이 높은 항목을 유지하세요.
 - action_candidates에는 정책 방향, 검토 주제, 개선 필요성, 담당자가 불분명하지만 실행 가능성이 있는 항목을 유지하세요.
+- QUESTION/ANSWER 태그에서 나온 제안, 검토 답변, 추진 의사도 실행 가능성이 있으면 action_candidates로 유지하세요.
 - action_items와 action_candidates는 관리자/프론트 검토용 AI 응답입니다. source_type, confidence, evidence, duplicate_group_id는 DB 저장용이 아닙니다.
 - 비슷해 보인다는 이유로 action_items나 action_candidates를 임의 병합하거나 제거하지 마세요. 대상과 행동이 사실상 같은 경우만 중복으로 판단하고, 제거하지 말고 duplicate_group_id로 묶으세요.
 - 담당자나 날짜가 확인되지 않은 값은 null을 유지하세요.
@@ -122,6 +127,10 @@ DEFAULT_MAX_CONCURRENCY = 3
 SECTION_TAG_PATTERN = re.compile(
     r"^\s*(\[의전/잡담\]|\[배경설명\]|\[핵심논의\]|\[결정사항\]|\[액션후보\]|\[질문\]|\[응답\]|\[보류/추후검토\]|ACTION:|DECISION:|DISCUSSION:|QUESTION:|ANSWER:|INFO:|CHITCHAT:)"
 )
+LINE_SECTION_TAG_PATTERN = re.compile(
+    r"(?=^\s*(?:\[의전/잡담\]|\[배경설명\]|\[핵심논의\]|\[결정사항\]|\[액션후보\]|\[질문\]|\[응답\]|\[보류/추후검토\]|ACTION:|DECISION:|DISCUSSION:|QUESTION:|ANSWER:|INFO:|CHITCHAT:))",
+    re.MULTILINE,
+)
 SUMMARY_PRIORITY_TAGS = {
     "[핵심논의]",
     "[결정사항]",
@@ -133,6 +142,38 @@ SUMMARY_PRIORITY_TAGS = {
     "ANSWER:",
     "INFO:",
 }
+FULL_DATE_PATTERN = re.compile(
+    r"(?P<year>\d{4})\s*(?:-|/|\.|년)\s*0?(?P<month>\d{1,2})\s*(?:-|/|\.|월)\s*0?(?P<day>\d{1,2})\s*일?"
+)
+RELATIVE_DATE_OFFSETS = {
+    "오늘": 0,
+    "내일": 1,
+    "모레": 2,
+}
+NO_EXPLICIT_DECISION_TEXT = "명확한 결정사항 없음"
+DECISION_TAGS = {"[결정사항]", "[보류/추후검토]", "DECISION:"}
+OPERATIONAL_DECISION_PATTERNS = (
+    "시간 관계상",
+    "발표를 진행",
+    "발표는 어렵",
+    "발표 주제",
+    "장관님께서 지정",
+    "다음 순서",
+    "회의를 마치",
+    "진행하도록",
+    "발언",
+    "토론을 진행",
+)
+WEAK_ACTION_PATTERNS = (
+    "검토",
+    "모색",
+    "필요",
+    "노력",
+    "준비",
+    "방안",
+    "제안",
+    "고민",
+)
 
 
 class SummaryServiceError(Exception):
@@ -191,7 +232,8 @@ def _chunk_text(text: str, model_name: str) -> list[str]:
 def select_summary_sections(text: str) -> str:
     priority_blocks = []
     has_section_tags = False
-    for block in re.split(r"\n{2,}", text):
+    normalized_text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
+    for block in LINE_SECTION_TAG_PATTERN.split(normalized_text):
         stripped = block.strip()
         if not stripped:
             continue
@@ -211,6 +253,109 @@ def select_summary_sections(text: str) -> str:
 
 def _current_date_text() -> str:
     return date.today().isoformat()
+
+
+def _date_evidence_variants(value: date) -> set[str]:
+    month = value.month
+    day = value.day
+    return {
+        value.isoformat(),
+        f"{value.year}.{month}.{day}",
+        f"{value.year}.{month:02d}.{day:02d}",
+        f"{value.year}/{month}/{day}",
+        f"{value.year}/{month:02d}/{day:02d}",
+        f"{value.year}년 {month}월 {day}일",
+        f"{value.year}년 {month:02d}월 {day:02d}일",
+    }
+
+
+def _dates_supported_by_text(text: str, current_date: date) -> set[date]:
+    supported = set()
+    for match in FULL_DATE_PATTERN.finditer(text):
+        year = int(match.group("year"))
+        month = int(match.group("month"))
+        day = int(match.group("day"))
+        try:
+            supported.add(date(year, month, day))
+        except ValueError:
+            continue
+    for word, offset in RELATIVE_DATE_OFFSETS.items():
+        if word in text:
+            supported.add(current_date + timedelta(days=offset))
+    return supported
+
+
+def _date_has_evidence(value: date, evidence_text: str, source_text: str, current_date: date) -> bool:
+    combined_text = f"{evidence_text}\n{source_text}"
+    if value in _dates_supported_by_text(combined_text, current_date):
+        return True
+    return any(variant in combined_text for variant in _date_evidence_variants(value))
+
+
+def _strip_unsupported_dates(result: AnalyzeResponse, source_text: str) -> AnalyzeResponse:
+    current_date = date.fromisoformat(_current_date_text())
+    payload = result.model_dump(mode="python")
+    for group_name in ("action_items", "action_candidates"):
+        for item in payload[group_name]:
+            evidence = item.get("evidence") or ""
+            for field_name in ("start_date", "due_date"):
+                value = item.get(field_name)
+                if value is None:
+                    continue
+                if not _date_has_evidence(value, evidence, source_text, current_date):
+                    item[field_name] = None
+    return AnalyzeResponse.model_validate(payload)
+
+
+def _tagged_text_has_any_section(text: str) -> bool:
+    normalized_text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
+    return any(
+        SECTION_TAG_PATTERN.match(block.strip())
+        for block in LINE_SECTION_TAG_PATTERN.split(normalized_text)
+    )
+
+
+def _is_operational_decision_block(text: str) -> bool:
+    return any(pattern in text for pattern in OPERATIONAL_DECISION_PATTERNS)
+
+
+def _tagged_text_has_business_decision(text: str) -> bool:
+    normalized_text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
+    for block in LINE_SECTION_TAG_PATTERN.split(normalized_text):
+        stripped = block.strip()
+        match = SECTION_TAG_PATTERN.match(stripped)
+        if match and match.group(1) in DECISION_TAGS:
+            if _is_operational_decision_block(stripped):
+                continue
+            return True
+    return False
+
+
+def _is_candidate_like_action(item: dict[str, object]) -> bool:
+    text = f"{item.get('task') or ''}\n{item.get('evidence') or ''}"
+    return any(pattern in text for pattern in WEAK_ACTION_PATTERNS)
+
+
+def _enforce_summary_policy(result: AnalyzeResponse, source_text: str) -> AnalyzeResponse:
+    payload = result.model_dump(mode="python")
+    if _tagged_text_has_any_section(source_text) and not _tagged_text_has_business_decision(source_text):
+        payload["summary"]["decision"] = NO_EXPLICIT_DECISION_TEXT
+
+    strict_items = []
+    moved_candidates = []
+    for item in payload["action_items"]:
+        if _is_candidate_like_action(item):
+            candidate = {**item}
+            candidate["priority"] = "MEDIUM"
+            candidate["source_type"] = "SUGGESTION"
+            candidate["confidence"] = "MEDIUM"
+            moved_candidates.append(candidate)
+            continue
+        strict_items.append(item)
+
+    payload["action_items"] = strict_items
+    payload["action_candidates"] = payload["action_candidates"] + moved_candidates
+    return AnalyzeResponse.model_validate(payload)
 
 
 async def _request_structured_response(
@@ -300,6 +445,8 @@ async def _analyze_meeting_parts(
             merge_content,
             AnalyzeResponse,
         )
+        result = _strip_unsupported_dates(result, summary_text)
+        result = _enforce_summary_policy(result, summary_text)
         return summary_text, chunk_results, result
 
     except OpenAIError as exc:

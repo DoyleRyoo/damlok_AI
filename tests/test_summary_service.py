@@ -218,6 +218,28 @@ class SelectSummarySectionsTest(unittest.TestCase):
         self.assertIn("DECISION:", selected)
         self.assertIn("ACTION:", selected)
 
+    def test_selects_line_tagged_sections_and_excludes_chitchat(self) -> None:
+        text = "\n".join(
+            [
+                "CHITCHAT: 안녕하세요. 회의를 시작하겠습니다.",
+                "INFO: 최근 중대재해 사례를 공유했습니다.",
+                "DISCUSSION: 지게차 사고 예방 방안을 논의했습니다.",
+                "DECISION: 안전 점검을 강화하기로 결정했습니다.",
+                "ACTION: 각 청은 현장 점검 계획을 수립해 주세요.",
+                "CHITCHAT: 감사합니다. 회의를 마치겠습니다.",
+            ]
+        )
+
+        selected = select_summary_sections(text)
+
+        self.assertNotIn("CHITCHAT:", selected)
+        self.assertNotIn("회의를 시작하겠습니다", selected)
+        self.assertNotIn("회의를 마치겠습니다", selected)
+        self.assertIn("INFO:", selected)
+        self.assertIn("DISCUSSION:", selected)
+        self.assertIn("DECISION:", selected)
+        self.assertIn("ACTION:", selected)
+
 
 class SummaryPromptPolicyTest(unittest.TestCase):
     def test_action_item_policy_preserves_unassigned_candidates(self) -> None:
@@ -227,6 +249,9 @@ class SummaryPromptPolicyTest(unittest.TestCase):
         self.assertIn("제거하지 말고 duplicate_group_id로 묶으세요", MERGE_SYSTEM_PROMPT)
         self.assertIn("action_candidates", CHUNK_SYSTEM_PROMPT)
         self.assertIn("DB 저장용이 아닙니다", CHUNK_SYSTEM_PROMPT)
+        self.assertIn("ACTION 태그라도 검토, 제안", CHUNK_SYSTEM_PROMPT)
+        self.assertIn("QUESTION/ANSWER 태그 안에도", CHUNK_SYSTEM_PROMPT)
+        self.assertIn("QUESTION/ANSWER 태그에서 나온 제안", MERGE_SYSTEM_PROMPT)
 
     def test_action_items_and_candidates_have_review_metadata(self) -> None:
         result = AnalyzeResponse.model_validate(VALID_RESULT)
@@ -409,6 +434,283 @@ class AnalyzeMeetingTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("결정-1", result.selected_summary_text)
         self.assertIn("액션-1", result.selected_summary_text)
         self.assertNotIn("잡담표식-ZZZ", result.selected_summary_text)
+
+    async def test_strips_action_item_dates_without_source_evidence(self) -> None:
+        chunk_result = ChunkAnalysis.model_validate(
+            {
+                "summary": VALID_RESULT["summary"],
+                "action_items": VALID_RESULT["action_items"],
+                "action_candidates": VALID_RESULT["action_candidates"],
+            }
+        )
+        final_payload = {
+            **VALID_RESULT,
+            "action_items": [
+                {
+                    **VALID_RESULT["action_items"][0],
+                    "due_date": "2026-06-30",
+                    "evidence": "김담당은 검색 API를 구현해 주세요.",
+                }
+            ],
+        }
+        final_result = AnalyzeResponse.model_validate(final_payload)
+        chunk_response = MagicMock()
+        chunk_response.choices = [
+            MagicMock(message=MagicMock(parsed=chunk_result, content=None))
+        ]
+        final_response = MagicMock()
+        final_response.choices = [
+            MagicMock(message=MagicMock(parsed=final_result, content=None))
+        ]
+        client = MagicMock()
+        client.chat.completions.parse = AsyncMock(side_effect=[chunk_response, final_response])
+
+        with (
+            patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}),
+            patch("app.services.summary_service.AsyncOpenAI", return_value=client),
+            patch("app.services.summary_service._chunk_text", return_value=["ACTION: 김담당은 검색 API를 구현해 주세요."]),
+            patch("app.services.summary_service._current_date_text", return_value="2026-06-26"),
+        ):
+            result = await analyze_meeting("ACTION: 김담당은 검색 API를 구현해 주세요.")
+
+        self.assertIsNone(result.action_items[0].due_date)
+
+    async def test_keeps_relative_today_tomorrow_dates_with_current_date_evidence(
+        self,
+    ) -> None:
+        chunk_result = ChunkAnalysis.model_validate(
+            {
+                "summary": VALID_RESULT["summary"],
+                "action_items": VALID_RESULT["action_items"],
+                "action_candidates": VALID_RESULT["action_candidates"],
+            }
+        )
+        final_payload = {
+            **VALID_RESULT,
+            "action_items": [
+                {
+                    **VALID_RESULT["action_items"][0],
+                    "due_date": "2026-06-27",
+                    "evidence": "김담당은 내일까지 검색 API를 구현해 주세요.",
+                }
+            ],
+        }
+        final_result = AnalyzeResponse.model_validate(final_payload)
+        chunk_response = MagicMock()
+        chunk_response.choices = [
+            MagicMock(message=MagicMock(parsed=chunk_result, content=None))
+        ]
+        final_response = MagicMock()
+        final_response.choices = [
+            MagicMock(message=MagicMock(parsed=final_result, content=None))
+        ]
+        client = MagicMock()
+        client.chat.completions.parse = AsyncMock(side_effect=[chunk_response, final_response])
+
+        with (
+            patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}),
+            patch("app.services.summary_service.AsyncOpenAI", return_value=client),
+            patch("app.services.summary_service._chunk_text", return_value=["ACTION: 김담당은 내일까지 검색 API를 구현해 주세요."]),
+            patch("app.services.summary_service._current_date_text", return_value="2026-06-26"),
+        ):
+            result = await analyze_meeting("ACTION: 김담당은 내일까지 검색 API를 구현해 주세요.")
+
+        self.assertEqual(result.action_items[0].due_date.isoformat(), "2026-06-27")
+
+    async def test_tagged_text_without_decision_tag_does_not_invent_decision(
+        self,
+    ) -> None:
+        chunk_result = ChunkAnalysis.model_validate(
+            {
+                "summary": VALID_RESULT["summary"],
+                "action_items": VALID_RESULT["action_items"],
+                "action_candidates": VALID_RESULT["action_candidates"],
+            }
+        )
+        final_payload = {
+            **VALID_RESULT,
+            "summary": {
+                **VALID_RESULT["summary"],
+                "decision": "검색 기능을 출시하기로 결정했습니다.",
+            },
+        }
+        final_result = AnalyzeResponse.model_validate(final_payload)
+        chunk_response = MagicMock()
+        chunk_response.choices = [
+            MagicMock(message=MagicMock(parsed=chunk_result, content=None))
+        ]
+        final_response = MagicMock()
+        final_response.choices = [
+            MagicMock(message=MagicMock(parsed=final_result, content=None))
+        ]
+        client = MagicMock()
+        client.chat.completions.parse = AsyncMock(side_effect=[chunk_response, final_response])
+
+        with (
+            patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}),
+            patch("app.services.summary_service.AsyncOpenAI", return_value=client),
+            patch(
+                "app.services.summary_service._chunk_text",
+                return_value=["ACTION: 김담당은 검색 API를 구현해 주세요."],
+            ),
+            patch("app.services.summary_service._current_date_text", return_value="2026-06-26"),
+        ):
+            result = await analyze_meeting("ACTION: 김담당은 검색 API를 구현해 주세요.")
+
+        self.assertEqual(result.summary.decision, "명확한 결정사항 없음")
+
+    async def test_operational_decision_tag_does_not_count_as_business_decision(
+        self,
+    ) -> None:
+        chunk_result = ChunkAnalysis.model_validate(
+            {
+                "summary": VALID_RESULT["summary"],
+                "action_items": [],
+                "action_candidates": VALID_RESULT["action_candidates"],
+            }
+        )
+        final_payload = {
+            **VALID_RESULT,
+            "summary": {
+                **VALID_RESULT["summary"],
+                "decision": "두 개 청만 발표를 진행하기로 결정했습니다.",
+            },
+            "action_items": [],
+        }
+        final_result = AnalyzeResponse.model_validate(final_payload)
+        chunk_response = MagicMock()
+        chunk_response.choices = [
+            MagicMock(message=MagicMock(parsed=chunk_result, content=None))
+        ]
+        final_response = MagicMock()
+        final_response.choices = [
+            MagicMock(message=MagicMock(parsed=final_result, content=None))
+        ]
+        client = MagicMock()
+        client.chat.completions.parse = AsyncMock(side_effect=[chunk_response, final_response])
+        transcript = (
+            "DECISION: 시간 관계상 모든 청에서 2분기 중점 추진 계획 발표는 어렵고 "
+            "한 2개 청 정도에서만 발표를 진행하도록 하겠습니다."
+        )
+
+        with (
+            patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}),
+            patch("app.services.summary_service.AsyncOpenAI", return_value=client),
+            patch("app.services.summary_service._chunk_text", return_value=[transcript]),
+            patch("app.services.summary_service._current_date_text", return_value="2026-06-26"),
+        ):
+            result = await analyze_meeting(transcript)
+
+        self.assertEqual(result.summary.decision, "명확한 결정사항 없음")
+
+    async def test_business_decision_tag_keeps_decision_summary(self) -> None:
+        chunk_result = ChunkAnalysis.model_validate(
+            {
+                "summary": VALID_RESULT["summary"],
+                "action_items": [],
+                "action_candidates": [],
+            }
+        )
+        final_result = AnalyzeResponse.model_validate(
+            {
+                **VALID_RESULT,
+                "summary": {
+                    **VALID_RESULT["summary"],
+                    "decision": "검색 기능은 MVP 범위에 포함하기로 결정했습니다.",
+                },
+                "action_items": [],
+                "action_candidates": [],
+            }
+        )
+        chunk_response = MagicMock()
+        chunk_response.choices = [
+            MagicMock(message=MagicMock(parsed=chunk_result, content=None))
+        ]
+        final_response = MagicMock()
+        final_response.choices = [
+            MagicMock(message=MagicMock(parsed=final_result, content=None))
+        ]
+        client = MagicMock()
+        client.chat.completions.parse = AsyncMock(side_effect=[chunk_response, final_response])
+        transcript = "DECISION: 검색 기능은 MVP 범위에 포함하기로 결정했습니다."
+
+        with (
+            patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}),
+            patch("app.services.summary_service.AsyncOpenAI", return_value=client),
+            patch("app.services.summary_service._chunk_text", return_value=[transcript]),
+            patch("app.services.summary_service._current_date_text", return_value="2026-06-26"),
+        ):
+            result = await analyze_meeting(transcript)
+
+        self.assertEqual(
+            result.summary.decision,
+            "검색 기능은 MVP 범위에 포함하기로 결정했습니다.",
+        )
+
+    async def test_weak_action_items_are_reclassified_as_candidates(self) -> None:
+        weak_item = {
+            **VALID_RESULT["action_items"][0],
+            "task": "현장 밀착 점검을 강화할 수 있도록 함께 노력할 것",
+            "evidence": "현장 밀착 점검을 강화할 수 있도록 본부 지방관서와 함께 노력해야 될 때입니다.",
+        }
+        strong_item = {
+            **VALID_RESULT["action_items"][0],
+            "task": "신규 감독관 교육 자료를 제공하고 우수 자료를 공유할 것",
+            "evidence": "본부에서 자료를 제공해 주시거나 우수한 자료들을 공유해 줄 수 있으시면 감사하겠습니다.",
+        }
+        chunk_result = ChunkAnalysis.model_validate(
+            {
+                "summary": VALID_RESULT["summary"],
+                "action_items": [weak_item, strong_item],
+                "action_candidates": [],
+            }
+        )
+        final_payload = {
+            **VALID_RESULT,
+            "action_items": [weak_item, strong_item],
+            "action_candidates": [],
+        }
+        final_result = AnalyzeResponse.model_validate(final_payload)
+        chunk_response = MagicMock()
+        chunk_response.choices = [
+            MagicMock(message=MagicMock(parsed=chunk_result, content=None))
+        ]
+        final_response = MagicMock()
+        final_response.choices = [
+            MagicMock(message=MagicMock(parsed=final_result, content=None))
+        ]
+        client = MagicMock()
+        client.chat.completions.parse = AsyncMock(side_effect=[chunk_response, final_response])
+
+        with (
+            patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}),
+            patch("app.services.summary_service.AsyncOpenAI", return_value=client),
+            patch(
+                "app.services.summary_service._chunk_text",
+                return_value=[
+                    "ACTION: 현장 밀착 점검을 강화할 수 있도록 함께 노력해야 합니다.\n"
+                    "ACTION: 신규 감독관 교육 자료를 제공하고 우수 자료를 공유해 주세요."
+                ],
+            ),
+            patch("app.services.summary_service._current_date_text", return_value="2026-06-26"),
+        ):
+            result = await analyze_meeting(
+                "ACTION: 현장 밀착 점검을 강화할 수 있도록 함께 노력해야 합니다.\n"
+                "ACTION: 신규 감독관 교육 자료를 제공하고 우수 자료를 공유해 주세요."
+            )
+
+        self.assertEqual(len(result.action_items), 1)
+        self.assertEqual(
+            result.action_items[0].task,
+            "신규 감독관 교육 자료를 제공하고 우수 자료를 공유할 것",
+        )
+        self.assertEqual(len(result.action_candidates), 1)
+        self.assertEqual(
+            result.action_candidates[0].task,
+            "현장 밀착 점검을 강화할 수 있도록 함께 노력할 것",
+        )
+        self.assertIs(result.action_candidates[0].source_type, ActionItemSourceType.SUGGESTION)
+        self.assertIs(result.action_candidates[0].confidence, ActionItemConfidence.MEDIUM)
 
 
 if __name__ == "__main__":

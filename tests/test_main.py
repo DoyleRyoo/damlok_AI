@@ -9,6 +9,7 @@ from app.schemas import (
     AnalyzeResponse,
     PreprocessDebugResponse,
     PreprocessResponse,
+    SttDebugResponse,
     TaggingDebugResponse,
     TaggingResponse,
 )
@@ -26,6 +27,23 @@ RESULT = AnalyzeResponse.model_validate(
         "action_items": [],
         "action_candidates": [],
         "meeting_summary": "긴 회의 원문 분석 테스트",
+    }
+)
+
+STT_DEBUG_RESULT = SttDebugResponse.model_validate(
+    {
+        "local": {
+            "available": True,
+            "elapsed_ms": 1200,
+            "text": "로컬 STT 결과",
+            "error": None,
+        },
+        "openai": {
+            "available": True,
+            "elapsed_ms": 800,
+            "text": "OpenAI STT 결과",
+            "error": None,
+        },
     }
 )
 
@@ -157,6 +175,27 @@ class AiActionsApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"text": "회의 음성 텍스트입니다."})
         uploaded_file = transcribe.await_args.args[0]
+        self.assertEqual(uploaded_file.filename, "meeting.wav")
+        self.assertEqual(uploaded_file.content_type, "audio/wav")
+
+    def test_stt_debug_compares_local_and_openai_providers(self) -> None:
+        contents = b"audio-bytes"
+
+        with patch(
+            "app.main.debug_transcribe_audio",
+            new=AsyncMock(return_value=STT_DEBUG_RESULT),
+        ) as debug_transcribe:
+            response = TestClient(app).post(
+                "/aiactions/stt/debug",
+                files={"file": ("meeting.wav", contents, "audio/wav")},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["local"]["elapsed_ms"], 1200)
+        self.assertEqual(response.json()["openai"]["elapsed_ms"], 800)
+        self.assertEqual(response.json()["local"]["text"], "로컬 STT 결과")
+        self.assertEqual(response.json()["openai"]["text"], "OpenAI STT 결과")
+        uploaded_file = debug_transcribe.await_args.args[0]
         self.assertEqual(uploaded_file.filename, "meeting.wav")
         self.assertEqual(uploaded_file.content_type, "audio/wav")
 

@@ -103,6 +103,9 @@ class PreprocessServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(create.await_args.kwargs["model"], "tag-model")
         self.assertIn("ACTION:", create.await_args.kwargs["messages"][0]["content"])
         self.assertIn("CHITCHAT:", create.await_args.kwargs["messages"][0]["content"])
+        self.assertIn("ACTION은 넓게", create.await_args.kwargs["messages"][0]["content"])
+        self.assertIn("DECISION은 좁게", create.await_args.kwargs["messages"][0]["content"])
+        self.assertIn("INFO는 사고 개요", create.await_args.kwargs["messages"][0]["content"])
 
     async def test_tagging_response_includes_cleaned_and_tagged_transcripts(self) -> None:
         with patch(
